@@ -18,6 +18,7 @@ from functools import partial
 import logging
 
 from sipyco import keepalive, pyon
+from sipyco.ssl_tools import create_ssl_context
 from sipyco.asyncio_tools import AsyncioServer
 
 
@@ -102,6 +103,9 @@ class Subscriber:
         A list of functions may also be used, and they will be called in turn.
     :param disconnect_cb: An optional function called when disconnection
         happens from external causes (i.e. not when ``close`` is called).
+    :param local_cert: Client's certificate file. Providing this enables SSL.
+    :param local_key: Client's private key file. Required when local_cert is provided.
+    :param peer_cert: Server's SSL certificate file to trust. Required when local_cert is provided.
     """
     def __init__(self, notifier_name, target_builder, notify_cb=None,
                  disconnect_cb=None):
@@ -114,9 +118,15 @@ class Subscriber:
         self.notify_cbs = notify_cb
         self.disconnect_cb = disconnect_cb
 
-    async def connect(self, host, port, before_receive_cb=None):
+    async def connect(self, host, port, local_cert=None, local_key=None, peer_cert=None,
+                      before_receive_cb=None):
+        if local_cert is None:
+            ssl_context = None
+        else:
+            ssl_context = create_ssl_context(local_cert, local_key, peer_cert)
         self.reader, self.writer = \
-            await keepalive.async_open_connection(host, port, limit=100 * 1024 * 1024)
+            await keepalive.async_open_connection(host, port, ssl=ssl_context,
+                                                  limit=100 * 1024 * 1024)
         try:
             if before_receive_cb is not None:
                 before_receive_cb()
