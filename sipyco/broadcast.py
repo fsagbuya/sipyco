@@ -1,6 +1,7 @@
 import asyncio
 
 from sipyco import keepalive, pyon
+from sipyco.ssl_tools import create_ssl_context
 from sipyco.asyncio_tools import AsyncioServer
 
 
@@ -15,9 +16,13 @@ class Receiver:
         self.notify_cbs = notify_cb
         self.disconnect_cb = disconnect_cb
 
-    async def connect(self, host, port):
+    async def connect(self, host, port, local_cert=None, local_key=None, peer_cert=None):
+        if local_cert is None:
+            ssl_context = None
+        else:
+            ssl_context = create_ssl_context(local_cert, local_key, peer_cert)
         self.reader, self.writer = \
-            await keepalive.async_open_connection(host, port, limit=100 * 1024 * 1024)
+            await keepalive.async_open_connection(host, port, ssl=ssl_context, limit=100 * 1024 * 1024)
         try:
             self.writer.write(_init_string)
             self.writer.write((self.name + "\n").encode())
