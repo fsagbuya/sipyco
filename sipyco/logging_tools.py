@@ -3,6 +3,7 @@ import logging
 import re
 
 from sipyco import keepalive
+from sipyco.ssl_tools import create_ssl_context
 from sipyco.asyncio_tools import TaskObject, AsyncioServer
 
 
@@ -178,11 +179,14 @@ class SourceFilter:
 
 
 class LogForwarder(logging.Handler, TaskObject):
-    def __init__(self, host, port, reconnect_timer=5.0, queue_size=1000,
-                 **kwargs):
+    def __init__(self, host, port, local_cert=None, local_key=None, peer_cert=None,
+                 reconnect_timer=5.0, queue_size=1000, **kwargs):
         logging.Handler.__init__(self, **kwargs)
         self.host = host
         self.port = port
+        self.local_cert = local_cert
+        self.local_key = local_key
+        self.peer_cert = peer_cert
         self.setFormatter(MultilineFormatter())
         self._queue = asyncio.Queue(queue_size)
         self.reconnect_timer = reconnect_timer
@@ -192,10 +196,15 @@ class LogForwarder(logging.Handler, TaskObject):
 
     async def _do(self):
         reader = writer = None
+        if local_cert is None:
+            ssl_context = None
+        else:
+            ssl_context = create_ssl_context(self.local_cert, self.local_key, self.peer_cert)
         while True:
             try:
                 reader, writer = await keepalive.async_open_connection(self.host,
-                                                                       self.port)
+                                                                       self.port,
+                                                                       ssl=ssl_context)
                 writer.write(_init_string)
                 while True:
                     message = await self._queue.get() + "\n"
