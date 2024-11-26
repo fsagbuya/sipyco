@@ -18,6 +18,11 @@ def get_argparser():
                         help="hostname or IP of the controller to connect to")
     parser.add_argument("port", metavar="PORT", type=int,
                         help="TCP port to use to connect to the controller")
+    parser.add_argument("--ssl", nargs=3, metavar=('CERT', 'KEY', 'PEER'),
+                        help="Enable SSL authentication: "
+                             "CERT: client certificate file, "
+                             "KEY: client private key, "
+                             "PEER: server certificate to trust")
     subparsers = parser.add_subparsers(dest="action")
     subparsers.add_parser("list-targets", help="list existing targets")
     parser_list_methods = subparsers.add_parser("list-methods",
@@ -97,8 +102,12 @@ def main():
     args = get_argparser().parse_args()
     if not args.action:
         args.target = None
+    if args.ssl:
+        cert, key, peer = args.ssl
+    else:
+        cert, key, peer = None, None, None
 
-    remote = Client(args.server, args.port, None)
+    remote = Client(args.server, args.port, None, local_cert=cert, local_key=key, peer_cert=peer)
     targets, description = remote.get_rpc_id()
     if args.action != "list-targets":
         if not args.target:

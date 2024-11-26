@@ -65,7 +65,7 @@ Remote Procedure Call tool
 
 This tool is the preferred way of handling simple RPC servers.
 Instead of writing a client for simple cases, you can simply use this tool
-to call remote functions of an RPC server.
+to call remote functions of an RPC server. For secure connections, see `SSL Setup`_.
 
 * Listing existing targets
 
@@ -127,3 +127,57 @@ Command-line details:
 .. argparse::
    :ref: sipyco.sipyco_rpctool.get_argparser
    :prog: sipyco_rpctool
+
+
+SSL Setup
+=========
+
+SiPyCo supports SSL/TLS encryption with mutual authentication for secure communication, but it is disabled by default. To enable and use SSL, follow these steps:
+
+**Generate server certificate:**
+
+.. code-block:: bash
+
+   openssl req -x509 -newkey rsa -keyout server.key -nodes -out server.pem -sha256 -subj "/CN=hostname"
+
+**Generate client certificate:**
+
+.. code-block:: bash
+
+   openssl req -x509 -newkey rsa -keyout client.key -nodes -out client.pem -sha256 -subj "/CN=hostname"
+
+.. note::
+    .. note::
+    The ``-subj "/CN=hostname"`` parameter sets the Common Name (CN) field in the certificate, which is needed for hostname verification. Replace "hostname" with your actual hostname.
+
+This creates:
+
+- A server certificate (``server.pem``) and key (``server.key``)
+- A client certificate (``client.pem``) and key (``client.key``)
+
+
+Enabling SSL
+------------
+
+To enable SSL, the server needs its certificate/key and trusts the client's certificate, while the client needs its certificate/key and trusts the server's certificate:
+
+**For servers:**
+
+.. code-block:: python
+
+   simple_server_loop(targets, host, port,
+                     local_cert="path/to/server.pem",
+                     local_key="path/to/server.key",
+                     peer_cert="path/to/client.pem")
+
+**For clients:**
+
+.. code-block:: python
+
+   client = Client(host, port,
+                  local_cert="path/to/client.pem",
+                  local_key="path/to/client.key",
+                  peer_cert="path/to/server.pem")
+
+.. note::
+    When SSL is enabled, mutual TLS authentication is mandatory. Both server and client must provide valid certificates and each must trust the other's certificate for the connection to be established.
