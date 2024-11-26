@@ -7,6 +7,7 @@ import logging
 from copy import copy
 
 from sipyco import keepalive
+from sipyco.ssl_tools import create_ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class AsyncioServer:
     def __init__(self):
         self._client_tasks = set()
 
-    async def start(self, host, port):
+    async def start(self, host, port, local_cert=None, local_key=None, peer_cert=None):
         """Starts the server.
 
         The user must call :meth:`stop`
@@ -58,9 +59,17 @@ class AsyncioServer:
         :param host: Bind address of the server (see ``asyncio.start_server``
             from the Python standard library).
         :param port: TCP port to bind to.
+        :param local_cert: Server's SSL certificate file. Providing this enables SSL.
+        :param local_key: Server's private key file. Required when local_cert is provided.
+        :param peer_cert: Client's SSL certificate file to trust. Required when local_cert is provided.
         """
+        if local_cert is None:
+            ssl_context = None
+        else:
+            ssl_context = create_ssl_context(local_cert, local_key, peer_cert, server_mode=True)
         self.server = await asyncio.start_server(self._handle_connection,
                                                  host, port,
+                                                 ssl=ssl_context,
                                                  limit=4*1024*1024)
 
     async def stop(self):

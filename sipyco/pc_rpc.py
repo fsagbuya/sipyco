@@ -20,6 +20,7 @@ import time
 from operator import itemgetter
 
 from sipyco import keepalive, pyon
+from sipyco.ssl_tools import create_ssl_context
 from sipyco.asyncio_tools import SignalHandler, AsyncioServer as _AsyncioServer
 from sipyco.packed_exceptions import *
 
@@ -97,6 +98,9 @@ class Client:
         Use ``None`` to skip selecting a target. The list of targets can then
         be retrieved using :meth:`~sipyco.pc_rpc.Client.get_rpc_id`
         and then one can be selected later using :meth:`~sipyco.pc_rpc.Client.select_rpc_target`.
+    :param local_cert: Client's certificate file. Providing this enables SSL.
+    :param local_key: Client's private key file. Required when local_cert is provided.
+    :param peer_cert: Server's SSL certificate file to trust. Required when local_cert is provided.
     :param timeout: Socket operation timeout. Use ``None`` for blocking
         (default), ``0`` for non-blocking, and a finite value to raise
         ``socket.timeout`` if an operation does not complete within the
@@ -106,9 +110,12 @@ class Client:
         client).
     """
 
-    def __init__(self, host, port, target_name=AutoTarget, timeout=None):
+    def __init__(self, host, port, target_name=AutoTarget,
+                 local_cert=None, local_key=None, peer_cert=None, timeout=None):
         self.__socket = socket.create_connection((host, port), timeout)
-
+        if local_cert is not None:
+            ssl_context = create_ssl_context(local_cert, local_key, peer_cert)
+            self.__socket = ssl_context.wrap_socket(self.__socket, server_hostname=host)
         try:
             self.__socket.sendall(_init_string)
 
@@ -206,12 +213,17 @@ class AsyncioClient:
         self.__description = None
         self.__valid_methods = set()
 
-    async def connect_rpc(self, host, port, target_name=AutoTarget):
+    async def connect_rpc(self, host, port, target_name=AutoTarget,
+                          local_cert=None, local_key=None, peer_cert=None):
         """Connects to the server. This cannot be done in __init__ because
         this method is a coroutine. See :class:`sipyco.pc_rpc.Client` for a description of the
         parameters."""
+        if local_cert is None:
+            ssl_context = None
+        else:
+            ssl_context = create_ssl_context(local_cert, local_key, peer_cert)
         self.__reader, self.__writer = \
-            await keepalive.async_open_connection(host, port, limit=100 * 1024 * 1024)
+            await keepalive.async_open_connection(host, port, ssl=ssl_context, limit=100 * 1024 * 1024)
         try:
             self.__writer.write(_init_string)
             server_identification = await self.__recv()
@@ -303,17 +315,22 @@ class BestEffortClient:
     RPC calls that failed because of network errors return ``None``. Other RPC
     calls are blocking and return the correct value.
 
+    See :class:`sipyco.pc_rpc.Client` for a description of the other parameters.
+
     :param firstcon_timeout: Timeout to use during the first (blocking)
         connection attempt at object initialization.
     :param retry: Amount of time to wait between retries when reconnecting
         in the background.
     """
 
-    def __init__(self, host, port, target_name,
-                 firstcon_timeout=1.0, retry=5.0):
+    def __init__(self, host, port, target_name, local_cert=None,
+                 local_key=None, peer_cert=None, firstcon_timeout=1.0, retry=5.0):
         self.__host = host
         self.__port = port
         self.__target_name = target_name
+        self.__local_cert = local_cert
+        self.__local_key = local_key
+        self.__peer_cert = peer_cert
         self.__retry = retry
 
         self.__conretry_terminate = False
@@ -337,6 +354,9 @@ class BestEffortClient:
         else:
             self.__socket = socket.create_connection(
                 (self.__host, self.__port), timeout)
+        if self.__local_cert is not None:
+            ssl_context = create_ssl_context(self.__local_cert, self.__local_key, self.__peer_cert)
+            self.__socket = ssl_context.wrap_socket(self.__socket, server_hostname=self.__host)
         self.__socket.sendall(_init_string)
         server_identification = self.__recv()
         target_name = _validate_target_name(self.__target_name,
@@ -635,7 +655,8 @@ class Server(_AsyncioServer):
         await self._terminate_request.wait()
 
 
-def simple_server_loop(targets, host, port, description=None, allow_parallel=False, *, loop=None):
+def simple_server_loop(targets, host, port, description=None, allow_parallel=False, *, loop=None,
+                       local_cert=None, local_key=None, peer_cert=None):
     """Runs a server until an exception is raised (e.g. the user hits Ctrl-C)
     or termination is requested by a client.
 
@@ -651,7 +672,7 @@ def simple_server_loop(targets, host, port, description=None, allow_parallel=Fal
         signal_handler.setup()
         try:
             server = Server(targets, description, True, allow_parallel)
-            used_loop.run_until_complete(server.start(host, port))
+            used_loop.run_until_complete(server.start(host, port, local_cert, local_key, peer_cert))
             try:
                 _, pending = used_loop.run_until_complete(asyncio.wait(
                     [used_loop.create_task(signal_handler.wait_terminate()),
