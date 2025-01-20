@@ -4,10 +4,13 @@ import subprocess
 import sys
 import time
 import unittest
+import os
+import ssl
 
 import numpy as np
 
 from sipyco import pc_rpc, pyon
+from sipyco.test.ssl_utils import create_ssl_certs
 
 
 test_address = "::1"
@@ -18,12 +21,23 @@ test_object = [5, 2.1, None, True, False,
 
 
 class RPCCase(unittest.TestCase):
-    def _run_server_and_test(self, test, *args):
+    @classmethod
+    def setUpClass(cls):
+        cls.ssl_certs = create_ssl_certs()
+
+    def _run_server_and_test(self, test, *args, ssl_args={}):
+        env = os.environ.copy()
+        if ssl_args:
+            env.update(self.ssl_certs)
+
         # running this file outside of unittest starts the echo server
         with subprocess.Popen([sys.executable,
-                               sys.modules[__name__].__file__]) as proc:
+                               sys.modules[__name__].__file__], env=env) as proc:
             try:
-                test(*args)
+                test(*args, ssl_args=ssl_args)
+            except (ssl.SSLError, SyntaxError):
+                proc.kill()
+                raise
             finally:
                 try:
                     proc.wait(timeout=1)
@@ -31,12 +45,11 @@ class RPCCase(unittest.TestCase):
                     proc.kill()
                     raise
 
-    def _blocking_echo(self, target, die_using_sys_exit=False):
+    def _blocking_echo(self, target, die_using_sys_exit=False, ssl_args={}):
         for attempt in range(100):
             time.sleep(.2)
             try:
-                remote = pc_rpc.Client(test_address, test_port,
-                                       target)
+                remote = pc_rpc.Client(test_address, test_port, target, **ssl_args)
             except ConnectionRefusedError:
                 pass
             else:
@@ -61,18 +74,45 @@ class RPCCase(unittest.TestCase):
     def test_blocking_echo(self):
         self._run_server_and_test(self._blocking_echo, "test")
 
+    def test_ssl_blocking_echo(self):
+        ssl_args = {"local_cert": self.ssl_certs["CLIENT_CERT"],
+                    "local_key": self.ssl_certs["CLIENT_KEY"],
+                    "peer_cert": self.ssl_certs["SERVER_CERT"]}
+        self._run_server_and_test(self._blocking_echo, "test", ssl_args=ssl_args)
+
     def test_sys_exit(self):
         self._run_server_and_test(self._blocking_echo, "test", True)
 
     def test_blocking_echo_autotarget(self):
         self._run_server_and_test(self._blocking_echo, pc_rpc.AutoTarget)
 
-    async def _asyncio_echo(self, target):
+    def test_ssl_verification_fail(self):
+        wrong_certs = create_ssl_certs()
+        wrong_client_args = {"local_cert": wrong_certs["CLIENT_CERT"],
+                             "local_key": wrong_certs["CLIENT_KEY"],
+                             "peer_cert": self.ssl_certs["SERVER_CERT"]}
+
+        wrong_local_key = {"local_cert": self.ssl_certs["CLIENT_CERT"],
+                           "local_key": wrong_certs["CLIENT_KEY"],
+                           "peer_cert": self.ssl_certs["SERVER_CERT"]}
+
+        wrong_peer_cert = {"local_cert": self.ssl_certs["CLIENT_CERT"],
+                           "local_key": self.ssl_certs["CLIENT_KEY"],
+                           "peer_cert": wrong_certs["SERVER_CERT"]}
+
+        with self.assertRaises(SyntaxError):
+            self._run_server_and_test(self._blocking_echo, "test", ssl_args=wrong_client_args)
+        with self.assertRaises(ssl.SSLError):
+            self._run_server_and_test(self._blocking_echo, "test", ssl_args=wrong_local_key)
+        with self.assertRaises(ssl.SSLCertVerificationError):
+            self._run_server_and_test(self._blocking_echo, "test", ssl_args=wrong_peer_cert)
+
+    async def _asyncio_echo(self, target, ssl_args={}):
         remote = pc_rpc.AsyncioClient()
         for attempt in range(100):
             await asyncio.sleep(.2)
             try:
-                await remote.connect_rpc(test_address, test_port, target)
+                await remote.connect_rpc(test_address, test_port, target, **ssl_args)
             except ConnectionRefusedError:
                 pass
             else:
@@ -90,16 +130,22 @@ class RPCCase(unittest.TestCase):
         finally:
             remote.close_rpc()
 
-    def _loop_asyncio_echo(self, target):
+    def _loop_asyncio_echo(self, target, ssl_args={}):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._asyncio_echo(target))
+            loop.run_until_complete(self._asyncio_echo(target, ssl_args=ssl_args))
         finally:
             loop.close()
 
     def test_asyncio_echo(self):
         self._run_server_and_test(self._loop_asyncio_echo, "test")
+
+    def test_ssl_asyncio_echo(self):
+        ssl_args = {"local_cert": self.ssl_certs["CLIENT_CERT"],
+                    "local_key": self.ssl_certs["CLIENT_KEY"],
+                    "peer_cert": self.ssl_certs["SERVER_CERT"]}
+        self._run_server_and_test(self._loop_asyncio_echo, "test", ssl_args=ssl_args)
 
     def test_asyncio_echo_autotarget(self):
         self._run_server_and_test(self._loop_asyncio_echo, pc_rpc.AutoTarget)
@@ -158,7 +204,13 @@ def run_server():
     try:
         echo = Echo()
         server = pc_rpc.Server({"test": echo}, builtin_terminate=True)
-        loop.run_until_complete(server.start(test_address, test_port))
+        ssl_args = {}
+        if all(k in os.environ for k in ["SERVER_CERT", "SERVER_KEY", "CLIENT_CERT"]):
+            ssl_args = {"local_cert": os.environ["SERVER_CERT"],
+                        "local_key": os.environ["SERVER_KEY"],
+                        "peer_cert": os.environ["CLIENT_CERT"]}
+
+        loop.run_until_complete(server.start(test_address, test_port, **ssl_args))
         try:
             loop.run_until_complete(server.wait_terminate())
         finally:

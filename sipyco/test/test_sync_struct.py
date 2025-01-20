@@ -3,6 +3,7 @@ import asyncio
 import numpy as np
 
 from sipyco import sync_struct
+from sipyco.test.ssl_utils import create_ssl_certs
 
 
 test_address = "::1"
@@ -48,17 +49,37 @@ class SyncStructCase(unittest.TestCase):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
-    async def _do_test_recv(self):
+    @classmethod
+    def setUpClass(cls):
+        cls.ssl_certs = create_ssl_certs()
+
+    async def _do_test_recv(self, ssl_certs=None):
         self.init_done = asyncio.Event()
         self.receiving_done = asyncio.Event()
 
         test_dict = sync_struct.Notifier(dict())
         publisher = sync_struct.Publisher({"test": test_dict})
-        await publisher.start(test_address, test_port)
+
+        pub_ssl = {}
+        sub_ssl = {}
+
+        if ssl_certs:
+            pub_ssl = {
+                "local_cert": ssl_certs["SERVER_CERT"],
+                "local_key": ssl_certs["SERVER_KEY"],
+                "peer_cert": ssl_certs["CLIENT_CERT"]
+            }
+            sub_ssl = {
+                "local_cert": ssl_certs["CLIENT_CERT"],
+                "local_key": ssl_certs["CLIENT_KEY"],
+                "peer_cert": ssl_certs["SERVER_CERT"]
+            }
+
+        await publisher.start(test_address, test_port, **pub_ssl)
 
         subscriber = sync_struct.Subscriber("test", self.init_test_dict,
                                             self.notify)
-        await subscriber.connect(test_address, test_port)
+        await subscriber.connect(test_address, test_port, **sub_ssl)
 
         # Wait for the initial replication to be completed so we actually
         # exercise the various actions instead of sending just one init mod.
@@ -74,6 +95,10 @@ class SyncStructCase(unittest.TestCase):
 
     def test_recv(self):
         self.loop.run_until_complete(self._do_test_recv())
+
+    def test_ssl_recv(self):
+        ssl_certs = create_ssl_certs()
+        self.loop.run_until_complete(self._do_test_recv(ssl_certs=self.ssl_certs))
 
     def tearDown(self):
         self.loop.close()
